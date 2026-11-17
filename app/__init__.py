@@ -1,0 +1,1 @@
+"""Kovászdada alkalmazás csomag."""

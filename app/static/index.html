@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kovászdada – kovászgondozó</title>
+<style>
+  :root { --bg:#faf6ef; --card:#fff; --ink:#3b2f22; --muted:#8a7a66; --accent:#c8853b; --ok:#5a8f3c; --warn:#c0392b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:24px 16px 8px; text-align:center; }
+  header h1 { margin:0; font-size:2rem; }
+  header p { margin:4px 0 0; color:var(--muted); }
+  main { max-width:960px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  section { background:var(--card); border-radius:14px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  h2 { margin-top:0; font-size:1.2rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+  .card { border:1px solid #eee2cf; border-radius:12px; padding:12px; }
+  .card h3 { margin:0 0 4px; }
+  .small { color:var(--muted); font-size:.85rem; }
+  .bar { height:10px; background:#f0e6d6; border-radius:5px; overflow:hidden; margin:8px 0; }
+  .bar > div { height:100%; background:var(--accent); transition:width .4s; }
+  .stage-PEAK .bar > div { background:var(--ok); }
+  .stage-FALLING .bar > div, .stage-HUNGRY .bar > div { background:var(--warn); }
+  form { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
+  label { display:flex; flex-direction:column; font-size:.85rem; color:var(--muted); gap:2px; }
+  input, select, button { font:inherit; padding:6px 8px; border:1px solid #d9c9b0; border-radius:8px; }
+  input[type=number] { width:100px; }
+  button { background:var(--accent); color:#fff; border:none; cursor:pointer; padding:8px 14px; }
+  button:hover { filter:brightness(1.1); }
+  .result { margin-top:10px; font-weight:600; min-height:1.2em; }
+  .error { color:var(--warn); }
+  footer { text-align:center; color:var(--muted); font-size:.8rem; padding:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍞 Kovászdada</h1>
+  <p>Mikor lesz csúcson a kovászod? Etetésnapló, csúcsidő-becslés és sütéstervező.</p>
+</header>
+
+<main>
+  <section>
+    <h2>Kovászaim</h2>
+    <div id="starters" class="grid"><p class="small">Betöltés…</p></div>
+  </section>
+
+  <section>
+    <h2>Új kovász örökbefogadása</h2>
+    <form id="new-starter">
+      <label>Név<input name="name" required maxlength="40" placeholder="pl. Bubi"></label>
+      <label>Liszt<input name="flour_type" maxlength="40" value="BL-80 fehér"></label>
+      <button>Hozzáadás</button>
+    </form>
+    <div class="result" id="new-starter-result"></div>
+  </section>
+
+  <section>
+    <h2>Etetés rögzítése</h2>
+    <form id="feed">
+      <label>Kovász<select name="starter_id" id="starter-select" required></select></label>
+      <label>Anyakovász (g)<input type="number" name="starter_g" value="20" min="1" step="any" required></label>
+      <label>Liszt (g)<input type="number" name="flour_g" value="40" min="1" step="any" required></label>
+      <label>Víz (g)<input type="number" name="water_g" value="40" min="1" step="any" required></label>
+      <label>Hőmérséklet (°C)<input type="number" name="temp_c" value="24" min="4" max="40" step="0.5" required></label>
+      <button>Megetettem!</button>
+    </form>
+    <div class="result" id="feed-result"></div>
+  </section>
+
+  <section>
+    <h2>Sütéstervező</h2>
+    <p class="small">Mikor etess, hogy a kovász pont a dagasztás idejére legyen csúcson?</p>
+    <form id="plan">
+      <label>Dagasztás ideje<input type="datetime-local" name="target_at" required></label>
+      <label>Anyakovász (g)<input type="number" name="starter_g" value="20" min="1" step="any" required></label>
+      <label>Liszt (g)<input type="number" name="flour_g" value="100" min="1" step="any" required></label>
+      <label>Víz (g)<input type="number" name="water_g" value="100" min="1" step="any" required></label>
+      <label>Hőmérséklet (°C)<input type="number" name="temp_c" value="22" min="4" max="40" step="0.5" required></label>
+      <button>Kiszámol</button>
+    </form>
+    <div class="result" id="plan-result"></div>
+  </section>
+
+  <section>
+    <h2>Arány-javaslat</h2>
+    <p class="small">Adott idő és hőmérséklet mellett milyen arányban etess?</p>
+    <form id="suggest">
+      <label>Ennyi óra múlva sütök<input type="number" name="hours" value="12" min="1" max="48" step="0.5" required></label>
+      <label>Hőmérséklet (°C)<input type="number" name="temp_c" value="24" min="4" max="40" step="0.5" required></label>
+      <button>Javasolj!</button>
+    </form>
+    <div class="result" id="suggest-result"></div>
+  </section>
+</main>
+
+<footer>Kovászdada · verzió: <span id="version">?</span> · <a href="/docs">API dokumentáció</a></footer>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmt = (iso) => new Date(iso).toLocaleString("hu-HU",
+    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const pad = (n) => String(n).padStart(2, "0");
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(Array.isArray(d) ? d.map((e) => e.msg).join("; ") : (d || res.statusText));
+    }
+    return body;
+  }
+
+  function formData(form) {
+    const data = Object.fromEntries(new FormData(form));
+    for (const k of ["starter_g", "flour_g", "water_g", "temp_c", "hours"]) {
+      if (k in data) data[k] = Number(data[k]);
+    }
+    return data;
+  }
+
+  function show(id, text, isError = false) {
+    const el = $(id);
+    el.textContent = text;
+    el.className = "result" + (isError ? " error" : "");
+  }
+
+  async function loadStarters() {
+    const starters = await api("/api/starters");
+    const box = $("#starters");
+    box.innerHTML = starters.length ? "" : '<p class="small">Még nincs kovászod.</p>';
+    for (const s of starters) {
+      const st = s.status;
+      const pct = st ? Math.min(100, Math.round(st.progress * 100)) : 0;
+      box.insertAdjacentHTML("beforeend", `
+        <div class="card stage-${st ? st.stage : "NEW"}">
+          <h3>${esc(s.name)}</h3>
+          <div class="small">${esc(s.flour_type)} · ${s.feedings_count} etetés</div>
+          <div class="bar"><div style="width:${pct}%"></div></div>
+          <div>${st ? esc(st.label) : "Még nem etetted 🥺"}</div>
+          <div class="small">${st ? `Csúcs: ${fmt(st.peak_at)} (${st.peak_hours} óra felfutás)` : ""}</div>
+        </div>`);
+    }
+    const sel = $("#starter-select");
+    const prev = sel.value;
+    sel.innerHTML = starters.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+    if (prev) sel.value = prev;
+  }
+
+  $("#new-starter").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const s = await api("/api/starters", { method: "POST", body: JSON.stringify(formData(e.target)) });
+      show("#new-starter-result", `Üdv a családban, ${s.name}! 🎉`);
+      e.target.reset();
+      await loadStarters();
+    } catch (err) { show("#new-starter-result", err.message, true); }
+  });
+
+  $("#feed").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { starter_id, ...data } = formData(e.target);
+    try {
+      const f = await api(`/api/starters/${starter_id}/feedings`, { method: "POST", body: JSON.stringify(data) });
+      show("#feed-result",
+        `Rögzítve! Hidratáció: ${f.hydration_percent}%, várható csúcs: ${fmt(f.peak_at)} (${f.peak_hours} óra múlva).`);
+      await loadStarters();
+    } catch (err) { show("#feed-result", err.message, true); }
+  });
+
+  $("#plan").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = formData(e.target);
+    data.target_at = new Date(data.target_at).toISOString();
+    try {
+      const p = await api("/api/plan", { method: "POST", body: JSON.stringify(data) });
+      show("#plan-result", p.already_late
+        ? `Erre már késő: ${fmt(p.feed_at)}-kor kellett volna etetni. Próbálj melegebb helyet vagy kisebb arányt!`
+        : `Etess ekkor: ${fmt(p.feed_at)} (felfutási idő: ${p.peak_hours} óra).`);
+    } catch (err) { show("#plan-result", err.message, true); }
+  });
+
+  $("#suggest").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { hours, temp_c } = formData(e.target);
+    try {
+      const r = await api(`/api/suggest-ratio?hours=${hours}&temp_c=${temp_c}`);
+      show("#suggest-result",
+        `Javasolt arány: ${r.ratio} (kb. ${r.peak_hours} óra alatt ér csúcsra)` + (r.warning ? ` – ${r.warning}` : ""));
+    } catch (err) { show("#suggest-result", err.message, true); }
+  });
+
+  // Alapértelmezett dagasztási idő: holnap reggel 8:00
+  const t = new Date();
+  t.setDate(t.getDate() + 1);
+  $("#plan [name=target_at]").value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T08:00`;
+
+  api("/api/health").then((h) => { $("#version").textContent = h.version.slice(0, 7); }).catch(() => {});
+  loadStarters().catch((err) => { $("#starters").innerHTML = `<p class="error">${esc(err.message)}</p>`; });
+  setInterval(() => loadStarters().catch(() => {}), 30000);
+</script>
+</body>
+</html>
