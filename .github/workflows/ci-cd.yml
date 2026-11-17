@@ -1,0 +1,131 @@
+name: CI/CD pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: "1️⃣ Lint + tesztek"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kód letöltése
+        uses: actions/checkout@v4
+
+      - name: Python beállítása
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Függőségek telepítése
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Unit + API tesztek (pytest)
+        run: pytest --junitxml=reports/junit.xml --cov=app --cov-report=term-missing --cov-report=xml:reports/coverage.xml
+
+      - name: Tesztriportok mentése
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: reports/
+
+  build:
+    name: "2️⃣ Build + konténer smoke teszt"
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Kód letöltése
+        uses: actions/checkout@v4
+
+      - name: Image név meghatározása (kisbetűs)
+        id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker image build
+        run: |
+          docker build \
+            --build-arg APP_VERSION=${{ github.sha }} \
+            --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
+            --label org.opencontainers.image.revision=${{ github.sha }} \
+            -t ${{ steps.meta.outputs.image }}:${{ github.sha }} \
+            -t ${{ steps.meta.outputs.image }}:latest \
+            .
+
+      - name: Konténer indítása (teszt-környezet)
+        run: docker run -d --name kovaszdada -p 8000:8000 ${{ steps.meta.outputs.image }}:${{ github.sha }}
+
+      - name: Smoke teszt a futó konténeren
+        run: bash scripts/smoke_test.sh http://localhost:8000 ${{ github.sha }} 60
+
+      - name: Konténer logjai
+        if: always()
+        run: docker logs kovaszdada || true
+
+      - name: Bejelentkezés a GitHub Container Registry-be
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Artifact (Docker image) publikálása
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          docker push ${{ steps.meta.outputs.image }}:latest
+
+  deploy:
+    name: "3️⃣ Deploy (Render) + éles smoke teszt"
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.RENDER_APP_URL }}
+    env:
+      RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+      APP_URL: ${{ vars.RENDER_APP_URL }}
+      IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
+    steps:
+      - name: Kód letöltése
+        uses: actions/checkout@v4
+
+      - name: Deploy konfiguráció ellenőrzése
+        id: cfg
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ] || [ -z "$APP_URL" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK secret vagy RENDER_APP_URL változó hiányzik – a deploy kimarad."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy indítása a Renderen (pontosan ezzel az image-dzsel)
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          ENCODED=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$IMAGE")
+          curl -fsS -X POST "${RENDER_DEPLOY_HOOK}&imgURL=${ENCODED}"
+          echo ""
+          echo "Deploy elindítva: $IMAGE"
+
+      - name: Éles smoke teszt (megvárja az új verziót)
+        if: steps.cfg.outputs.ready == 'true'
+        run: bash scripts/smoke_test.sh "$APP_URL" "${{ github.sha }}" 600
